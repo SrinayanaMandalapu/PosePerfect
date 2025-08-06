@@ -1,6 +1,15 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import pyttsx3      
+import threading  
+
+# ---Function to handle speech in a separate thread ---
+def speak(text):
+    """Initializes the TTS engine and speaks the given text in a background thread."""
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
 
 def calculate_angle(a, b, c):
     a, b, c = np.array([a.x, a.y]), np.array([b.x, b.y]), np.array([c.x, c.y])
@@ -13,11 +22,11 @@ if not cap.isOpened():
     print("FATAL ERROR: Could not open camera.")
     exit()
 
-# --- SETUP VARIABLES ---
 stage = None
 feedback = None
 counter = 0
-current_exercise = 'squat' # Default exercise
+current_exercise = 'squat' 
+last_feedback = None  # --- NEW ---
 
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
@@ -44,11 +53,21 @@ while cap.isOpened():
         if current_exercise == 'squat':
             knee_angle = calculate_angle(hip, knee, ankle)
             hip_angle = calculate_angle(shoulder, hip, knee)
-            if knee_angle < 100: stage = "DOWN"
+            
+            if knee_angle < 100: 
+                stage = "DOWN"
             if knee_angle > 160 and stage == 'DOWN':
                 stage = "UP"
                 counter += 1
-            feedback = "CORRECT" if stage == "DOWN" and hip_angle > 90 else "INCORRECT" if stage == "DOWN" else "Ready"
+
+            
+            if stage == "UP":
+                feedback = "Squat Down"
+            elif stage == "DOWN":
+                if hip_angle > 90:
+                    feedback = "Go Up"
+                else:
+                    feedback = "Fix Form & Go Up"
 
         elif current_exercise == 'plank':
             stage = "HOLDING"
@@ -66,31 +85,39 @@ while cap.isOpened():
             if elbow_angle < 40 and stage == 'DOWN':
                 stage = "UP"
                 counter += 1
-            feedback = "UP" if stage == "UP" else "DOWN"
+            feedback = "Curl Up" if stage == "DOWN" else "Go Down" if stage == "UP" else None
 
     except Exception as e:
         print(f"Error processing frame: {e}")
         pass
 
+    # --- TRIGGER VOICE FEEDBACK ---
+    # Check if the feedback has changed and is not None
+    if feedback and feedback != last_feedback:
+        # Run the speech in a separate thread so it doesn't block the video
+        threading.Thread(target=speak, args=(feedback,), daemon=True).start()
+        last_feedback = feedback
+
     # --- RENDER STATUS BOX ---
     box_color = (0,0,0)
     text_color = (255,255,255)
-    feedback_color = (0,255,0) if feedback in ["CORRECT", "GOOD FORM", "UP"] else (0,0,255)
+    feedback_text = feedback if feedback else "Ready"
+    feedback_color = (0,255,0) if feedback in ["CORRECT", "GOOD FORM", "UP"] else (0,0,255) if feedback else text_color
 
     cv2.rectangle(image, (0,0), (640, 60), box_color, -1)
     cv2.putText(image, 'EXERCISE', (15,12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
     cv2.putText(image, current_exercise.upper(), (10,45), cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2, cv2.LINE_AA)
     cv2.putText(image, 'REPS' if current_exercise != 'plank' else 'STATE', (200,12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
-    cv2.putText(image, str(counter) if current_exercise != 'plank' else stage, (195,45), cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2, cv2.LINE_AA)
+    cv2.putText(image, str(counter) if current_exercise != 'plank' else (stage if stage else ""), (195,45), cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2, cv2.LINE_AA)
     cv2.putText(image, 'FEEDBACK', (400,12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1, cv2.LINE_AA)
-    cv2.putText(image, feedback, (395,45), cv2.FONT_HERSHEY_SIMPLEX, 1, feedback_color, 2, cv2.LINE_AA)
+    cv2.putText(image, feedback_text, (395,45), cv2.FONT_HERSHEY_SIMPLEX, 1, feedback_color, 2, cv2.LINE_AA)
 
     mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
     cv2.imshow('Pose Correction Trainer', image)
 
     key = cv2.waitKey(10) & 0xFF
     if key == ord('q'): break
-    elif key == ord('s'): current_exercise, counter, stage = 'squat', 0, 'UP'
+    elif key == ord('s'): current_exercise, counter, stage = 'squat', 0, None
     elif key == ord('p'): current_exercise, counter, stage = 'plank', 0, 'HOLDING'
     elif key == ord('b'): current_exercise, counter, stage = 'bicep_curl', 0, 'DOWN'
 
